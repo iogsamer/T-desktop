@@ -55,7 +55,7 @@ jobs:
       - name: Install vcpkg dependencies
         shell: cmd
         run: |
-          vcpkg install openssl:${{ matrix.triplet }} curl:${{ matrix.triplet }} nlohmann-json:${{ matrix.triplet }} unofficial-webview2:${{ matrix.triplet }}
+          vcpkg install openssl:${{ matrix.triplet }} curl:${{ matrix.triplet }} nlohmann-json:${{ matrix.triplet }} microsoft-webview2:${{ matrix.triplet }}
 
       - name: Download libmpv
         shell: pwsh

@@ -32,7 +32,7 @@ include_directories(${MPV_INCLUDE_DIR})
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(unofficial-webview2 CONFIG REQUIRED)
+find_package(microsoft-webview2 CONFIG REQUIRED)
 
 set(SOURCES
         src/main.cpp
@@ -77,7 +77,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         winhttp.lib
         shlwapi.lib
         nlohmann_json::nlohmann_json
-        unofficial::webview2::webview2
+        microsoft::webview2
         OpenSSL::SSL
         OpenSSL::Crypto
         CURL::libcurl
