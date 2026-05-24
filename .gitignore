@@ -1,0 +1,26 @@
+# Build outputs
+build/
+cmake-build-*/
+*.exe
+*.dll
+*.lib
+*.obj
+
+# Dependencies (downloaded in CI)
+deps/libmpv/
+deps/discord-rpc/
+node_modules/
+
+# Temp files
+*.tmp
+*.log
+dist-*/
+
+# IDE
+.vscode/
+.vs/
+*.user
+
+# OS
+.DS_Store
+Thumbs.db

@@ -7,14 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to build (e.g. 5.0.21)'
+        description: 'Version (e.g. 5.0.21)'
         required: false
         default: '5.0.21'
-      create_release:
-        description: 'Create GitHub Release?'
-        required: false
-        default: 'true'
-        type: boolean
 
 env:
   PROJECT_NAME: darkflix
@@ -24,7 +19,7 @@ permissions:
   contents: write
 
 jobs:
-  # ──────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────
   build-x64:
     name: 🏗️ Build x64
     runs-on: windows-latest
@@ -34,37 +29,55 @@ jobs:
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      # ── Version ────────────────────────────────────────────────
+      # ── Get version from CMakeLists.txt ──────────────────────────
       - name: 🔢 Get version
         id: get_version
         shell: pwsh
         run: |
           $cmake = Get-Content CMakeLists.txt -Raw
-          if ($cmake -match 'project\s*\(\s*darkflix\s+VERSION\s+"?([\d.]+)"?') {
+          if ($cmake -match 'project\s*\(\s*\w+\s+VERSION\s+"?([\d.]+)"?') {
             $ver = $matches[1]
-          } elseif ("${{ github.event.inputs.version }}" -ne "") {
-            $ver = "${{ github.event.inputs.version }}"
           } else {
-            $ver = "5.0.21"
+            $ver = "${{ github.event.inputs.version }}"
+            if (-not $ver) { $ver = "5.0.21" }
           }
           echo "version=$ver" >> $env:GITHUB_OUTPUT
-          echo "Version: $ver"
+          Write-Host "Version: $ver"
 
-      # ── MSVC ───────────────────────────────────────────────────
-      - name: 🛠️ Setup MSVC
+      # ── Setup MSVC ────────────────────────────────────────────────
+      - name: 🛠️ Setup MSVC x64
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      # ── vcpkg ──────────────────────────────────────────────────
-      - name: 📦 Setup vcpkg
-        uses: lukka/run-vcpkg@v10
-        with:
-          vcpkgGitCommitId: '3fd2b6b8a64b0c5c9e5d8c0e6d5c8a9b7f6e5d4c'
+      # ── Install Ninja ─────────────────────────────────────────────
+      - name: ⚡ Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
 
+      # ── Setup vcpkg (direct bootstrap — no lukka action) ─────────
+      - name: 📦 Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:GITHUB_WORKSPACE\vcpkg" --depth=1
+          & "$env:GITHUB_WORKSPACE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_ENV
+          echo "$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_PATH
+          Write-Host "✅ vcpkg bootstrapped"
+
+      # ── Cache vcpkg packages ──────────────────────────────────────
+      - name: 💾 Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg/packages
+            ${{ github.workspace }}/vcpkg/installed
+            ${{ github.workspace }}/vcpkg/downloads
+          key: vcpkg-x64-windows-static-${{ hashFiles('CMakeLists.txt') }}-v3
+          restore-keys: |
+            vcpkg-x64-windows-static-
+
+      # ── Install vcpkg packages ────────────────────────────────────
       - name: 📦 Install vcpkg dependencies
         shell: pwsh
         run: |
@@ -72,147 +85,145 @@ jobs:
             openssl:x64-windows-static `
             curl:x64-windows-static `
             nlohmann-json:x64-windows-static `
-            webview2:x64-windows-static `
-            --triplet x64-windows-static
+            unofficial-webview2:x64-windows-static `
+            --triplet x64-windows-static `
+            --no-print-usage
+          Write-Host "✅ vcpkg packages installed"
 
-      # ── Ninja ──────────────────────────────────────────────────
-      - name: 🔧 Install Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v4
-
-      # ── libmpv ─────────────────────────────────────────────────
+      # ── Download libmpv x64 ───────────────────────────────────────
       - name: 🎬 Download libmpv x64
         shell: pwsh
         run: |
           $url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240317/mpv-dev-x86_64-20240317-git-a3134e7.7z"
-          Invoke-WebRequest $url -OutFile mpv-dev-x64.7z
-          7z x mpv-dev-x64.7z -ompv-dev-x64 -y
-          New-Item -ItemType Directory -Force -Path deps/libmpv/x86_64/include
-          New-Item -ItemType Directory -Force -Path deps/libmpv/x86_64
-          Copy-Item mpv-dev-x64/include/* deps/libmpv/x86_64/include/ -Recurse -Force
-          Copy-Item mpv-dev-x64/libmpv.dll.a deps/libmpv/x86_64/mpv.lib
-          Copy-Item mpv-dev-x64/libmpv-2.dll  deps/libmpv/x86_64/libmpv-2.dll
+          Invoke-WebRequest $url -OutFile mpv-dev-x64.7z -TimeoutSec 120
+          7z x mpv-dev-x64.7z -ompv-x64 -y | Out-Null
+          New-Item -ItemType Directory -Force -Path deps/libmpv/x86_64/include | Out-Null
+          Copy-Item mpv-x64/include/* deps/libmpv/x86_64/include/ -Recurse -Force
+          Copy-Item mpv-x64/libmpv.dll.a deps/libmpv/x86_64/mpv.lib  -ErrorAction SilentlyContinue
+          # try both naming conventions
+          $dllSrc = Get-ChildItem mpv-x64 -Filter "libmpv*.dll" | Select-Object -First 1
+          if ($dllSrc) { Copy-Item $dllSrc.FullName deps/libmpv/x86_64/libmpv-2.dll }
+          Write-Host "✅ libmpv x64 ready"
 
-      # ── Discord RPC ────────────────────────────────────────────
+      # ── Download Discord RPC ──────────────────────────────────────
       - name: 💬 Download Discord RPC
         shell: pwsh
         run: |
           $url = "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip"
-          Invoke-WebRequest $url -OutFile discord-rpc.zip
+          Invoke-WebRequest $url -OutFile discord-rpc.zip -TimeoutSec 60
           Expand-Archive discord-rpc.zip -DestinationPath discord-rpc-raw
-          New-Item -ItemType Directory -Force -Path deps/discord-rpc/win64-static/lib
-          New-Item -ItemType Directory -Force -Path deps/discord-rpc/win64-static/include
+          New-Item -ItemType Directory -Force -Path deps/discord-rpc/win64-static/lib    | Out-Null
+          New-Item -ItemType Directory -Force -Path deps/discord-rpc/win64-static/include | Out-Null
           Copy-Item discord-rpc-raw/discord-rpc/win64-static/lib/discord-rpc.lib  deps/discord-rpc/win64-static/lib/
-          Copy-Item discord-rpc-raw/discord-rpc/include/*                          deps/discord-rpc/win64-static/include/ -Recurse -Force
+          Copy-Item discord-rpc-raw/discord-rpc/include/*                          deps/discord-rpc/win64-static/include/ -Recurse
+          Write-Host "✅ Discord RPC ready"
 
-      # ── CMake Build ────────────────────────────────────────────
-      - name: ⚙️ CMake Configure
+      # ── CMake configure ───────────────────────────────────────────
+      - name: ⚙️ CMake Configure x64
         shell: pwsh
         run: |
-          $vcpkgRoot = "$env:VCPKG_ROOT"
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-            -B cmake-build-release-x64 `
+            -B cmake-build-x64 `
             -S .
 
-      - name: 🔨 Build
+      # ── Build ─────────────────────────────────────────────────────
+      - name: 🔨 Build x64
         shell: pwsh
-        run: |
-          cmake --build cmake-build-release-x64 --config Release --parallel
+        run: cmake --build cmake-build-x64 --config Release --parallel
 
-      # ── Dist folder ────────────────────────────────────────────
-      # ── Auth server: install npm deps ──────────────────────────
-      - name: 📦 Install auth server deps
+      # ── Install auth server deps ──────────────────────────────────
+      - name: 📦 Auth server npm install
         shell: pwsh
         run: |
-          cd packages/darkflix-auth
-          npm install --ignore-scripts --omit=dev
-          Write-Host "✅ darkflix-auth dependencies installed"
+          if (Test-Path "packages/darkflix-auth/package.json") {
+            cd packages/darkflix-auth
+            npm install --omit=dev --ignore-scripts
+            Write-Host "✅ auth server deps installed"
+          }
 
-      - name: 📁 Prepare dist
+      # ── Download node.exe for auth server ────────────────────────
+      - name: ⬇️ Download node.exe
         shell: pwsh
         run: |
-          $dist = "dist/win-x64"
-          New-Item -ItemType Directory -Force -Path $dist
-          # Main exe
-          Copy-Item "cmake-build-release-x64/${{ env.PROJECT_NAME }}.exe" "$dist/${{ env.PROJECT_NAME }}.exe"
-          # MPV DLL
-          Copy-Item "deps/libmpv/x86_64/libmpv-2.dll" "$dist/"
-          # Runtime (if exists in utils/windows)
-          if (Test-Path "utils/windows/stremio-runtime.exe") {
-            Copy-Item "utils/windows/stremio-runtime.exe" "$dist/"
-          }
-          if (Test-Path "utils/windows/server.js") {
-            Copy-Item "utils/windows/server.js" "$dist/"
-          }
-          # ffmpeg
-          if (Test-Path "utils/windows/ffmpeg") {
-            Copy-Item "utils/windows/ffmpeg/*" "$dist/" -Recurse -Force
-          }
-          # portable_config defaults
-          if (Test-Path "utils/stremio") {
-            New-Item -ItemType Directory -Force -Path "$dist/portable_config"
-            Copy-Item "utils/stremio/*" "$dist/portable_config/" -Recurse -Force
-          }
-          # ── DarkFlix Auth Server ──────────────────────────────
-          New-Item -ItemType Directory -Force -Path "$dist/packages/darkflix-auth"
-          Copy-Item "packages/darkflix-auth/src"     "$dist/packages/darkflix-auth/src"     -Recurse -Force
-          Copy-Item "packages/darkflix-auth/public"  "$dist/packages/darkflix-auth/public"  -Recurse -Force
-          Copy-Item "packages/darkflix-auth/node_modules" "$dist/packages/darkflix-auth/node_modules" -Recurse -Force
-          Copy-Item "packages/darkflix-auth/package.json" "$dist/packages/darkflix-auth/package.json"
-          # ── Bundle node.exe for the auth server ──────────────
-          # Download the Windows node binary matching the runtime version
-          $nodeVersion = "v22.12.0"
-          $nodeUrl = "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-win-x64.zip"
-          Invoke-WebRequest $nodeUrl -OutFile node-win.zip
+          $url = "https://nodejs.org/dist/v22.12.0/node-v22.12.0-win-x64.zip"
+          Invoke-WebRequest $url -OutFile node-win.zip -TimeoutSec 120
           Expand-Archive node-win.zip -DestinationPath node-win-tmp
-          Copy-Item "node-win-tmp/node-$nodeVersion-win-x64/node.exe" "$dist/node.exe"
-          Write-Host "✅ node.exe bundled: $(Get-Item "$dist/node.exe" | Select-Object -ExpandProperty Length) bytes"
-          Write-Host "✅ dist/win-x64 ready:"
+          Copy-Item "node-win-tmp/node-v22.12.0-win-x64/node.exe" "cmake-build-x64/node.exe"
+          Write-Host "✅ node.exe bundled"
+
+      # ── Prepare dist folder ───────────────────────────────────────
+      - name: 📁 Prepare dist x64
+        shell: pwsh
+        run: |
+          $dist = "dist-x64"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          # Main exe + node
+          Copy-Item "cmake-build-x64/${{ env.PROJECT_NAME }}.exe" "$dist/" -ErrorAction SilentlyContinue
+          if (-not (Test-Path "$dist/${{ env.PROJECT_NAME }}.exe")) {
+            # Try alternative name
+            $exe = Get-ChildItem cmake-build-x64 -Filter "*.exe" | Where-Object { $_.Name -ne "node.exe" } | Select-Object -First 1
+            if ($exe) { Copy-Item $exe.FullName "$dist/${{ env.PROJECT_NAME }}.exe" }
+          }
+          Copy-Item "cmake-build-x64/node.exe"    "$dist/"
+          Copy-Item "deps/libmpv/x86_64/libmpv-2.dll" "$dist/" -ErrorAction SilentlyContinue
+
+          # Runtime server
+          @("stremio-runtime.exe","server.js") | ForEach-Object {
+            if (Test-Path "utils/windows/$_") { Copy-Item "utils/windows/$_" "$dist/" }
+          }
+
+          # Auth server package
+          if (Test-Path "packages/darkflix-auth") {
+            Copy-Item "packages/darkflix-auth" "$dist/packages/darkflix-auth" -Recurse -Force
+          }
+
+          Write-Host "✅ dist x64:"
           Get-ChildItem $dist | Format-Table Name, Length
 
-      # ── NSIS Installer ─────────────────────────────────────────
+      # ── Build NSIS installer ──────────────────────────────────────
       - name: 📦 Install NSIS
-        run: choco install nsis -y --no-progress
+        run: choco install nsis -y --no-progress --quiet
 
-      - name: 🪟 Build Installer (x64)
+      - name: 🪟 Build installer x64
         shell: pwsh
         env:
           package_version: ${{ steps.get_version.outputs.version }}
           arch: x64
         run: |
           $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
-          & $nsis "utils/windows/installer/windows-installer.nsi"
-          Write-Host "✅ Installer built"
+          if (Test-Path $nsis) {
+            & $nsis "utils/windows/installer/windows-installer.nsi"
+            Write-Host "✅ Installer built"
+          } else {
+            Write-Host "⚠️ NSIS not found, skipping installer"
+          }
 
-      # ── Upload artifacts ───────────────────────────────────────
-      - name: 📤 Upload EXE artifact
+      # ── Upload artifacts ──────────────────────────────────────────
+      - name: 📤 Upload exe
         uses: actions/upload-artifact@v4
         with:
           name: DarkFlix-${{ steps.get_version.outputs.version }}-x64-exe
-          path: cmake-build-release-x64/${{ env.PROJECT_NAME }}.exe
+          path: dist-x64/${{ env.PROJECT_NAME }}.exe
+          if-no-files-found: warn
           retention-days: 30
 
-      - name: 📤 Upload Installer artifact
+      - name: 📤 Upload installer
         uses: actions/upload-artifact@v4
         with:
           name: DarkFlix-${{ steps.get_version.outputs.version }}-x64-setup
           path: "${{ env.APP_DISPLAY_NAME }} ${{ steps.get_version.outputs.version }}-x64.exe"
+          if-no-files-found: warn
           retention-days: 30
 
-      - name: 📤 Upload dist folder
-        uses: actions/upload-artifact@v4
-        with:
-          name: DarkFlix-${{ steps.get_version.outputs.version }}-x64-dist
-          path: dist/win-x64/
-          retention-days: 7
-
-  # ──────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────
   build-x86:
     name: 🏗️ Build x86
     runs-on: windows-latest
-    needs: build-x64   # run after x64 so version is already printed
+    needs: build-x64
 
     steps:
       - name: 📥 Checkout
@@ -223,7 +234,7 @@ jobs:
         shell: pwsh
         run: |
           $cmake = Get-Content CMakeLists.txt -Raw
-          if ($cmake -match 'project\s*\(\s*darkflix\s+VERSION\s+"?([\d.]+)"?') {
+          if ($cmake -match 'project\s*\(\s*\w+\s+VERSION\s+"?([\d.]+)"?') {
             echo "version=$($matches[1])" >> $env:GITHUB_OUTPUT
           } else {
             echo "version=5.0.21" >> $env:GITHUB_OUTPUT
@@ -234,45 +245,59 @@ jobs:
         with:
           arch: x86
 
-      - name: 📦 Setup vcpkg
-        uses: lukka/run-vcpkg@v10
-        with:
-          vcpkgGitCommitId: '3fd2b6b8a64b0c5c9e5d8c0e6d5c8a9b7f6e5d4c'
+      - name: ⚡ Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
 
-      - name: 📦 Install vcpkg x86 deps
+      - name: 📦 Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg "$env:GITHUB_WORKSPACE\vcpkg" --depth=1
+          & "$env:GITHUB_WORKSPACE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_ENV
+          echo "$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_PATH
+
+      - name: 💾 Cache vcpkg x86
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/vcpkg/packages
+            ${{ github.workspace }}/vcpkg/installed
+            ${{ github.workspace }}/vcpkg/downloads
+          key: vcpkg-x86-windows-static-${{ hashFiles('CMakeLists.txt') }}-v3
+          restore-keys: vcpkg-x86-windows-static-
+
+      - name: 📦 Install vcpkg dependencies x86
         shell: pwsh
         run: |
           vcpkg install `
             openssl:x86-windows-static `
             curl:x86-windows-static `
             nlohmann-json:x86-windows-static `
-            webview2:x86-windows-static `
-            --triplet x86-windows-static
-
-      - name: 🔧 Install Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v4
+            unofficial-webview2:x86-windows-static `
+            --triplet x86-windows-static `
+            --no-print-usage
 
       - name: 🎬 Download libmpv x86
         shell: pwsh
         run: |
           $url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240317/mpv-dev-i686-20240317-git-a3134e7.7z"
-          Invoke-WebRequest $url -OutFile mpv-dev-x86.7z
-          7z x mpv-dev-x86.7z -ompv-dev-x86 -y
-          New-Item -ItemType Directory -Force -Path deps/libmpv/i686/include
-          Copy-Item mpv-dev-x86/include/* deps/libmpv/i686/include/ -Recurse -Force
-          Copy-Item mpv-dev-x86/libmpv.dll.a deps/libmpv/i686/mpv.lib
-          Copy-Item mpv-dev-x86/libmpv-2.dll  deps/libmpv/i686/libmpv-2.dll
+          Invoke-WebRequest $url -OutFile mpv-dev-x86.7z -TimeoutSec 120
+          7z x mpv-dev-x86.7z -ompv-x86 -y | Out-Null
+          New-Item -ItemType Directory -Force -Path deps/libmpv/i686/include | Out-Null
+          Copy-Item mpv-x86/include/* deps/libmpv/i686/include/ -Recurse -Force
+          Copy-Item mpv-x86/libmpv.dll.a deps/libmpv/i686/mpv.lib -ErrorAction SilentlyContinue
+          $dll = Get-ChildItem mpv-x86 -Filter "libmpv*.dll" | Select-Object -First 1
+          if ($dll) { Copy-Item $dll.FullName deps/libmpv/i686/libmpv-2.dll }
 
       - name: 💬 Download Discord RPC x86
         shell: pwsh
         run: |
-          $url = "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip"
-          Invoke-WebRequest $url -OutFile discord-rpc.zip
-          Expand-Archive discord-rpc.zip -DestinationPath discord-rpc-raw
-          New-Item -ItemType Directory -Force -Path deps/discord-rpc/win32-static/lib
-          New-Item -ItemType Directory -Force -Path deps/discord-rpc/win32-static/include
-          Copy-Item discord-rpc-raw/discord-rpc/win32-static/lib/discord-rpc.lib  deps/discord-rpc/win32-static/lib/
-          Copy-Item discord-rpc-raw/discord-rpc/include/*                          deps/discord-rpc/win32-static/include/ -Recurse -Force
+          Invoke-WebRequest "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip" -OutFile d.zip -TimeoutSec 60
+          Expand-Archive d.zip -DestinationPath drpc
+          New-Item -Force -ItemType Directory -Path deps/discord-rpc/win32-static/lib    | Out-Null
+          New-Item -Force -ItemType Directory -Path deps/discord-rpc/win32-static/include | Out-Null
+          Copy-Item drpc/discord-rpc/win32-static/lib/discord-rpc.lib  deps/discord-rpc/win32-static/lib/
+          Copy-Item drpc/discord-rpc/include/*                          deps/discord-rpc/win32-static/include/ -Recurse
 
       - name: ⚙️ CMake Configure x86
         shell: pwsh
@@ -281,105 +306,84 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x86-windows-static `
-            -B cmake-build-release-x86 -S .
+            -B cmake-build-x86 -S .
 
       - name: 🔨 Build x86
         shell: pwsh
-        run: cmake --build cmake-build-release-x86 --config Release --parallel
-
-      - name: 📁 Prepare dist x86
-        shell: pwsh
-        run: |
-          $dist = "dist/win-x86"
-          New-Item -ItemType Directory -Force -Path $dist
-          Copy-Item "cmake-build-release-x86/${{ env.PROJECT_NAME }}.exe" "$dist/${{ env.PROJECT_NAME }}.exe"
-          Copy-Item "deps/libmpv/i686/libmpv-2.dll" "$dist/"
-          if (Test-Path "utils/windows/stremio-runtime.exe") { Copy-Item "utils/windows/stremio-runtime.exe" "$dist/" }
-          if (Test-Path "utils/windows/server.js")            { Copy-Item "utils/windows/server.js"            "$dist/" }
+        run: cmake --build cmake-build-x86 --config Release --parallel
 
       - name: 📦 Install NSIS
-        run: choco install nsis -y --no-progress
+        run: choco install nsis -y --no-progress --quiet
 
-      - name: 🪟 Build Installer x86
+      - name: 🪟 Build installer x86
         shell: pwsh
         env:
           package_version: ${{ steps.get_version.outputs.version }}
           arch: x86
         run: |
-          & "C:\Program Files (x86)\NSIS\makensis.exe" "utils/windows/installer/windows-installer.nsi"
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (Test-Path $nsis) { & $nsis "utils/windows/installer/windows-installer.nsi" }
 
-      - name: 📤 Upload x86 artifacts
+      - name: 📤 Upload x86 setup
         uses: actions/upload-artifact@v4
         with:
           name: DarkFlix-${{ steps.get_version.outputs.version }}-x86-setup
           path: "${{ env.APP_DISPLAY_NAME }} ${{ steps.get_version.outputs.version }}-x86.exe"
+          if-no-files-found: warn
           retention-days: 30
 
-  # ──────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────
   release:
-    name: 🚀 Publish GitHub Release
+    name: 🚀 Publish Release
     runs-on: ubuntu-latest
     needs: [build-x64, build-x86]
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.create_release == 'true'
+    if: startsWith(github.ref, 'refs/tags/')
 
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
       - name: ⬇️ Download x64 setup
         uses: actions/download-artifact@v4
         with:
           name: DarkFlix-${{ needs.build-x64.outputs.version }}-x64-setup
-          path: release-files/
+          path: release/
 
       - name: ⬇️ Download x86 setup
         uses: actions/download-artifact@v4
         with:
           name: DarkFlix-${{ needs.build-x64.outputs.version }}-x86-setup
-          path: release-files/
+          path: release/
 
       - name: ⬇️ Download x64 exe
         uses: actions/download-artifact@v4
         with:
           name: DarkFlix-${{ needs.build-x64.outputs.version }}-x64-exe
-          path: release-files/
+          path: release/
 
-      - name: 📋 Generate checksums
-        run: |
-          cd release-files
-          sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+      - name: 📋 Checksums
+        run: cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: 🏷️ Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', needs.build-x64.outputs.version) }}
           name: "🎬 DarkFlix v${{ needs.build-x64.outputs.version }}"
           body: |
             ## 🎬 DarkFlix v${{ needs.build-x64.outputs.version }}
 
             ### 📥 Downloads
-            | File | Architecture | Type |
-            |------|-------------|------|
+            | File | Arch | Type |
+            |------|------|------|
             | `DarkFlix ${{ needs.build-x64.outputs.version }}-x64.exe` | 64-bit | 🪟 Installer |
             | `DarkFlix ${{ needs.build-x64.outputs.version }}-x86.exe` | 32-bit | 🪟 Installer |
-            | `darkflix.exe` | 64-bit | ⚡ Portable EXE |
+            | `darkflix.exe` | 64-bit | ⚡ Portable |
 
-            ### ✨ What's New
-            - 🟠 Full orange theme throughout the app
-            - 🎬 Rebranded as DarkFlix
-            - ⚡ Built on latest WebView2 + MPV engine
-            - 🖥️ Native 4K playback with hardware decoding
-            - 💬 Discord Rich Presence support
-            - 🔄 Built-in auto-updater
+            ### ✨ Features
+            - 🟠 Orange dark theme
+            - 🔐 Google Sign-In
+            - 📺 Built-in OpenSubtitles Pro (Arabic)
+            - 🌊 Built-in Torrentio (Quality + Arabic)
+            - 🎞️ MPV 4K hardware decoding
 
-            ### 📋 Requirements
-            - Windows 10/11 (x64 or x86)
-            - WebView2 Runtime (auto-installed by the installer)
-
-            ### 🔐 Checksums (SHA256)
-            See `SHA256SUMS.txt` in release assets.
-          files: |
-            release-files/*
+            ### 📋 SHA256
+            See `SHA256SUMS.txt` in assets.
+          files: release/*
           draft: false
           prerelease: false
