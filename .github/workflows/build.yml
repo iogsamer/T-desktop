@@ -12,10 +12,8 @@ jobs:
         include:
           - arch: x64
             triplet: x64-windows-static
-            generator_platform: x64
           - arch: x86
             triplet: x86-windows-static
-            generator_platform: Win32
 
     name: Build ${{ matrix.arch }}
     runs-on: windows-latest
@@ -36,49 +34,52 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
 
-      # ── vcpkg FIX: configure git safe.directory + increase buffer ──
-      - name: Configure git for vcpkg
-        shell: bash
-        run: |
-          git config --global core.longpaths true
-          git config --global http.postBuffer 524288000
-          git config --global safe.directory "*"
-
+      # ── vcpkg manual install (fixes error 128 from lukka/run-vcpkg) ──
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v10
-        with:
-          vcpkgGitCommitId: "b2cb0da531c2f1f740045bfe7c4dac59f0b2d5b0"
-          runVcpkgInstall: true
-        env:
-          VCPKG_DEFAULT_TRIPLET: ${{ matrix.triplet }}
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "C:\vcpkg" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install vcpkg dependencies
         shell: cmd
         run: |
-          vcpkg install openssl:${{ matrix.triplet }} curl:${{ matrix.triplet }} nlohmann-json:${{ matrix.triplet }} microsoft-webview2:${{ matrix.triplet }}
+          C:\vcpkg\vcpkg install openssl:${{ matrix.triplet }} curl:${{ matrix.triplet }} nlohmann-json:${{ matrix.triplet }} microsoft-webview2:${{ matrix.triplet }}
 
-      - name: Download libmpv
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Download libmpv ${{ matrix.arch }}
         shell: pwsh
         run: |
           $arch = "${{ matrix.arch }}"
-          $url = if ($arch -eq "x64") {
-            "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240101/mpv-dev-x86_64-20240101-git-PLACEHOLDER.7z"
+          $outDir = "deps/libmpv/$( if ($arch -eq 'x64') { 'x86_64' } else { 'i686' } )"
+          if (Test-Path $outDir) {
+            Write-Host "libmpv already in repo, skipping download."
           } else {
-            "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240101/mpv-dev-i686-20240101-git-PLACEHOLDER.7z"
-          }
-          # Use pre-bundled deps if they exist, otherwise skip
-          if (Test-Path "deps/libmpv") {
-            Write-Host "libmpv already bundled."
-          } else {
-            Write-Host "WARNING: deps/libmpv not found - add it to your repo or this step will fail."
+            Write-Error "ERROR: deps/libmpv not found. Add libmpv to your repo under deps/libmpv/"
+            exit 1
           }
 
-      - name: Configure CMake
+      - name: Download Discord RPC
+        shell: pwsh
+        run: |
+          $dir = if ("${{ matrix.arch }}" -eq "x64") { "deps/discord-rpc/win64-static" } else { "deps/discord-rpc/win32-static" }
+          if (Test-Path $dir) {
+            Write-Host "discord-rpc already in repo."
+          } else {
+            Write-Error "ERROR: deps/discord-rpc not found. Add it to your repo."
+            exit 1
+          }
+
+      - name: CMake Configure
         shell: cmd
         run: |
           cmake -G "Ninja" ^
             -DCMAKE_BUILD_TYPE=Release ^
-            -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" ^
+            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} ^
             -B cmake-build-${{ matrix.arch }} ^
             -S .
