@@ -63,7 +63,7 @@ jobs:
       - name: 📦 Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
-          vcpkgGitCommitId: 'a42af01b72c28a8e1d7b48107b33e4f286a55ef6'
+          vcpkgGitCommitId: '80e3748b899d76d8f1701fdbf2a48ba1c6a6df41'
 
       - name: 📦 Install vcpkg dependencies
         shell: pwsh
@@ -72,7 +72,7 @@ jobs:
             openssl:x64-windows-static `
             curl:x64-windows-static `
             nlohmann-json:x64-windows-static `
-            unofficial-webview2:x64-windows-static `
+            webview2:x64-windows-static `
             --triplet x64-windows-static
 
       # ── Ninja ──────────────────────────────────────────────────
@@ -237,7 +237,7 @@ jobs:
       - name: 📦 Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
-          vcpkgGitCommitId: 'a42af01b72c28a8e1d7b48107b33e4f286a55ef6'
+          vcpkgGitCommitId: '80e3748b899d76d8f1701fdbf2a48ba1c6a6df41'
 
       - name: 📦 Install vcpkg x86 deps
         shell: pwsh
@@ -246,7 +246,7 @@ jobs:
             openssl:x86-windows-static `
             curl:x86-windows-static `
             nlohmann-json:x86-windows-static `
-            unofficial-webview2:x86-windows-static `
+            webview2:x86-windows-static `
             --triplet x86-windows-static
 
       - name: 🔧 Install Ninja
