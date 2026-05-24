@@ -59,11 +59,15 @@ jobs:
       - name: 📦 Bootstrap vcpkg
         shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg "$env:GITHUB_WORKSPACE\vcpkg" --depth=1
-          & "$env:GITHUB_WORKSPACE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
-          echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_ENV
-          echo "$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_PATH
-          Write-Host "✅ vcpkg bootstrapped"
+          $vcpkgDir = "$env:GITHUB_WORKSPACE\vcpkg"
+          git clone https://github.com/microsoft/vcpkg $vcpkgDir --depth=1
+          & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
+          # Persist for all subsequent steps
+          echo "VCPKG_ROOT=$vcpkgDir" >> $env:GITHUB_ENV
+          echo "VCPKG_EXE=$vcpkgDir\vcpkg.exe" >> $env:GITHUB_ENV
+          Add-Content $env:GITHUB_PATH $vcpkgDir
+          Write-Host "✅ vcpkg bootstrapped at $vcpkgDir"
+          & "$vcpkgDir\vcpkg.exe" version
 
       # ── Cache vcpkg packages ──────────────────────────────────────
       - name: 💾 Cache vcpkg
@@ -81,7 +85,12 @@ jobs:
       - name: 📦 Install vcpkg dependencies
         shell: pwsh
         run: |
-          vcpkg install `
+          $vcpkg = "$env:VCPKG_EXE"
+          if (-not $vcpkg -or -not (Test-Path $vcpkg)) {
+            $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe"
+          }
+          Write-Host "Using vcpkg: $vcpkg"
+          & $vcpkg install `
             openssl:x64-windows-static `
             curl:x64-windows-static `
             nlohmann-json:x64-windows-static `
@@ -122,9 +131,11 @@ jobs:
       - name: ⚙️ CMake Configure x64
         shell: pwsh
         run: |
+          $toolchain = "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+          Write-Host "Toolchain: $toolchain"
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_TOOLCHAIN_FILE="$toolchain" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
             -B cmake-build-x64 `
             -S .
@@ -251,10 +262,13 @@ jobs:
       - name: 📦 Bootstrap vcpkg
         shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg "$env:GITHUB_WORKSPACE\vcpkg" --depth=1
-          & "$env:GITHUB_WORKSPACE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
-          echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_ENV
-          echo "$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_PATH
+          $vcpkgDir = "$env:GITHUB_WORKSPACE\vcpkg"
+          git clone https://github.com/microsoft/vcpkg $vcpkgDir --depth=1
+          & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
+          echo "VCPKG_ROOT=$vcpkgDir" >> $env:GITHUB_ENV
+          echo "VCPKG_EXE=$vcpkgDir\vcpkg.exe" >> $env:GITHUB_ENV
+          Add-Content $env:GITHUB_PATH $vcpkgDir
+          & "$vcpkgDir\vcpkg.exe" version
 
       - name: 💾 Cache vcpkg x86
         uses: actions/cache@v4
@@ -269,7 +283,9 @@ jobs:
       - name: 📦 Install vcpkg dependencies x86
         shell: pwsh
         run: |
-          vcpkg install `
+          $vcpkg = "$env:VCPKG_EXE"
+          if (-not $vcpkg -or -not (Test-Path $vcpkg)) { $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe" }
+          & $vcpkg install `
             openssl:x86-windows-static `
             curl:x86-windows-static `
             nlohmann-json:x86-windows-static `
