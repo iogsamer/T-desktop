@@ -55,49 +55,40 @@ jobs:
       - name: ⚡ Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@v4
 
-      # ── Setup vcpkg (direct bootstrap — no lukka action) ─────────
-      - name: 📦 Bootstrap vcpkg
-        shell: pwsh
-        run: |
-          $vcpkgDir = "$env:GITHUB_WORKSPACE\vcpkg"
-          git clone https://github.com/microsoft/vcpkg $vcpkgDir --depth=1
-          & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
-          # Persist for all subsequent steps
-          echo "VCPKG_ROOT=$vcpkgDir" >> $env:GITHUB_ENV
-          echo "VCPKG_EXE=$vcpkgDir\vcpkg.exe" >> $env:GITHUB_ENV
-          Add-Content $env:GITHUB_PATH $vcpkgDir
-          Write-Host "✅ vcpkg bootstrapped at $vcpkgDir"
-          & "$vcpkgDir\vcpkg.exe" version
-
-      # ── Cache vcpkg packages ──────────────────────────────────────
+      # ── Setup vcpkg + install all deps in one reliable step ────────
       - name: 💾 Cache vcpkg
         uses: actions/cache@v4
+        id: vcpkg-cache
         with:
-          path: |
-            ${{ github.workspace }}/vcpkg/packages
-            ${{ github.workspace }}/vcpkg/installed
-            ${{ github.workspace }}/vcpkg/downloads
-          key: vcpkg-x64-windows-static-${{ hashFiles('CMakeLists.txt') }}-v3
-          restore-keys: |
-            vcpkg-x64-windows-static-
+          path: ${{ github.workspace }}/vcpkg
+          key: vcpkg-x64-${{ hashFiles('CMakeLists.txt') }}-v5
+          restore-keys: vcpkg-x64-
 
-      # ── Install vcpkg packages ────────────────────────────────────
-      - name: 📦 Install vcpkg dependencies
+      - name: 📦 Bootstrap & Install vcpkg dependencies
         shell: pwsh
         run: |
-          $vcpkg = "$env:VCPKG_EXE"
-          if (-not $vcpkg -or -not (Test-Path $vcpkg)) {
-            $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe"
+          $vcpkgDir = "${{ github.workspace }}\vcpkg"
+          $vcpkgExe = "$vcpkgDir\vcpkg.exe"
+          # Bootstrap only if not cached
+          if (-not (Test-Path $vcpkgExe)) {
+            Write-Host "Cloning vcpkg..."
+            git clone https://github.com/microsoft/vcpkg $vcpkgDir --depth=1
+            Write-Host "Bootstrapping..."
+            & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
+          } else {
+            Write-Host "vcpkg restored from cache"
           }
-          Write-Host "Using vcpkg: $vcpkg"
-          & $vcpkg install `
+          Write-Host "vcpkg version:"
+          & $vcpkgExe version
+          Write-Host "Installing packages..."
+          & $vcpkgExe install `
             openssl:x64-windows-static `
             curl:x64-windows-static `
             nlohmann-json:x64-windows-static `
             unofficial-webview2:x64-windows-static `
             --triplet x64-windows-static `
             --no-print-usage
-          Write-Host "✅ vcpkg packages installed"
+          Write-Host "✅ All vcpkg packages ready"
 
       # ── Download libmpv x64 ───────────────────────────────────────
       - name: 🎬 Download libmpv x64
@@ -131,11 +122,11 @@ jobs:
       - name: ⚙️ CMake Configure x64
         shell: pwsh
         run: |
-          $toolchain = "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+          $toolchain = "${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake"
           Write-Host "Toolchain: $toolchain"
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$toolchain" `
+            "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
             -B cmake-build-x64 `
             -S .
@@ -259,33 +250,26 @@ jobs:
       - name: ⚡ Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@v4
 
-      - name: 📦 Bootstrap vcpkg
-        shell: pwsh
-        run: |
-          $vcpkgDir = "$env:GITHUB_WORKSPACE\vcpkg"
-          git clone https://github.com/microsoft/vcpkg $vcpkgDir --depth=1
-          & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
-          echo "VCPKG_ROOT=$vcpkgDir" >> $env:GITHUB_ENV
-          echo "VCPKG_EXE=$vcpkgDir\vcpkg.exe" >> $env:GITHUB_ENV
-          Add-Content $env:GITHUB_PATH $vcpkgDir
-          & "$vcpkgDir\vcpkg.exe" version
-
       - name: 💾 Cache vcpkg x86
         uses: actions/cache@v4
+        id: vcpkg-cache
         with:
-          path: |
-            ${{ github.workspace }}/vcpkg/packages
-            ${{ github.workspace }}/vcpkg/installed
-            ${{ github.workspace }}/vcpkg/downloads
-          key: vcpkg-x86-windows-static-${{ hashFiles('CMakeLists.txt') }}-v3
-          restore-keys: vcpkg-x86-windows-static-
+          path: ${{ github.workspace }}/vcpkg
+          key: vcpkg-x86-${{ hashFiles('CMakeLists.txt') }}-v5
+          restore-keys: vcpkg-x86-
 
-      - name: 📦 Install vcpkg dependencies x86
+      - name: 📦 Bootstrap & Install vcpkg x86
         shell: pwsh
         run: |
-          $vcpkg = "$env:VCPKG_EXE"
-          if (-not $vcpkg -or -not (Test-Path $vcpkg)) { $vcpkg = "$env:VCPKG_ROOT\vcpkg.exe" }
-          & $vcpkg install `
+          $vcpkgDir = "${{ github.workspace }}\vcpkg"
+          $vcpkgExe = "$vcpkgDir\vcpkg.exe"
+          if (-not (Test-Path $vcpkgExe)) {
+            git clone https://github.com/microsoft/vcpkg $vcpkgDir --depth=1
+            & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
+          } else {
+            Write-Host "vcpkg from cache"
+          }
+          & $vcpkgExe install `
             openssl:x86-windows-static `
             curl:x86-windows-static `
             nlohmann-json:x86-windows-static `
@@ -320,7 +304,7 @@ jobs:
         run: |
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            "-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x86-windows-static `
             -B cmake-build-x86 -S .
 
