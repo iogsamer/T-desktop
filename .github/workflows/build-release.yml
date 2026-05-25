@@ -61,34 +61,53 @@ jobs:
         id: vcpkg-cache
         with:
           path: ${{ github.workspace }}/vcpkg
-          key: vcpkg-x64-${{ hashFiles('CMakeLists.txt') }}-v5
+          key: vcpkg-x64-${{ hashFiles('CMakeLists.txt') }}-v6
           restore-keys: vcpkg-x64-
 
-      - name: 📦 Bootstrap & Install vcpkg dependencies
+      - name: 📦 Bootstrap vcpkg
         shell: pwsh
         run: |
-          $vcpkgDir = "${{ github.workspace }}\vcpkg"
-          $vcpkgExe = "$vcpkgDir\vcpkg.exe"
-          # Bootstrap only if not cached
-          if (-not (Test-Path $vcpkgExe)) {
-            Write-Host "Cloning vcpkg..."
-            git clone https://github.com/microsoft/vcpkg $vcpkgDir --depth=1
-            Write-Host "Bootstrapping..."
-            & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
+          $dir = "${{ github.workspace }}\vcpkg"
+          if (Test-Path "$dir\vcpkg.exe") {
+            Write-Host "✅ vcpkg from cache"
+            & "$dir\vcpkg.exe" version
           } else {
-            Write-Host "vcpkg restored from cache"
+            Write-Host "Cloning vcpkg..."
+            if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+            git clone https://github.com/microsoft/vcpkg $dir --depth=1 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+            Write-Host "Running bootstrap..."
+            $bat = "$dir\bootstrap-vcpkg.bat"
+            cmd /c "$bat -disableMetrics" 2>&1
+            if (-not (Test-Path "$dir\vcpkg.exe")) { throw "bootstrap failed - vcpkg.exe not found" }
+            Write-Host "✅ vcpkg bootstrapped"
+            & "$dir\vcpkg.exe" version
           }
-          Write-Host "vcpkg version:"
-          & $vcpkgExe version
-          Write-Host "Installing packages..."
-          & $vcpkgExe install `
-            openssl:x64-windows-static `
-            curl:x64-windows-static `
-            nlohmann-json:x64-windows-static `
-            unofficial-webview2:x64-windows-static `
-            --triplet x64-windows-static `
-            --no-print-usage
-          Write-Host "✅ All vcpkg packages ready"
+
+      - name: 📦 Install vcpkg deps (openssl + curl + json)
+        shell: pwsh
+        run: |
+          $vcpkg = "${{ github.workspace }}\vcpkg\vcpkg.exe"
+          Write-Host "vcpkg path: $vcpkg"
+          Write-Host "Exists: $(Test-Path $vcpkg)"
+          & $vcpkg install openssl:x64-windows-static curl:x64-windows-static nlohmann-json:x64-windows-static --triplet x64-windows-static
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed with code $LASTEXITCODE" }
+          Write-Host "✅ Base packages installed"
+
+      - name: 📦 Install vcpkg webview2
+        shell: pwsh
+        run: |
+          $vcpkg = "${{ github.workspace }}\vcpkg\vcpkg.exe"
+          Write-Host "Installing unofficial-webview2..."
+          & $vcpkg install unofficial-webview2:x64-windows-static
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "⚠️ unofficial-webview2 failed, trying x64-windows..."
+            & $vcpkg install unofficial-webview2:x64-windows
+            if ($LASTEXITCODE -ne 0) { throw "webview2 install failed" }
+            Write-Host "✅ unofficial-webview2 (dynamic) installed"
+          } else {
+            Write-Host "✅ unofficial-webview2 (static) installed"
+          }
 
       # ── Download libmpv x64 ───────────────────────────────────────
       - name: 🎬 Download libmpv x64
@@ -124,12 +143,15 @@ jobs:
         run: |
           $toolchain = "${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake"
           Write-Host "Toolchain: $toolchain"
+          Write-Host "Exists: $(Test-Path $toolchain)"
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            "-DVCPKG_HOST_TRIPLET=x64-windows" `
             -B cmake-build-x64 `
             -S .
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
       # ── Build ─────────────────────────────────────────────────────
       - name: 🔨 Build x64
