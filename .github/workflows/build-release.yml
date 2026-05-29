@@ -103,14 +103,23 @@ jobs:
       - name: 🎬 Download libmpv x64
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240317/mpv-dev-x86_64-20240317-git-a3134e7.7z" -OutFile mpv.7z -TimeoutSec 120
+          # Get latest available libmpv build from shinchiro
+          $releases = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases?per_page=20"
+          $url = $null
+          foreach ($rel in $releases) {
+            $asset = $rel.assets | Where-Object { $_.name -match "mpv-dev-x86_64.*\.7z$" } | Select-Object -First 1
+            if ($asset) { $url = $asset.browser_download_url; break }
+          }
+          if (-not $url) { throw "Could not find libmpv x64 release" }
+          Write-Host "Downloading: $url"
+          Invoke-WebRequest $url -OutFile mpv.7z -TimeoutSec 180
           7z x mpv.7z -ompv -y | Out-Null
           New-Item -Force -ItemType Directory "deps\libmpv\x86_64\include" | Out-Null
           Copy-Item "mpv\include\*" "deps\libmpv\x86_64\include\" -Recurse -Force
           Copy-Item "mpv\libmpv.dll.a" "deps\libmpv\x86_64\mpv.lib" -ErrorAction SilentlyContinue
           $dll = Get-ChildItem mpv -Filter "libmpv*.dll" | Select-Object -First 1
           if ($dll) { Copy-Item $dll.FullName "deps\libmpv\x86_64\libmpv-2.dll" }
-          Write-Host "✅ libmpv x64"
+          Write-Host "✅ libmpv x64 ready"
 
       - name: 💬 Download Discord RPC
         shell: pwsh
@@ -262,7 +271,15 @@ jobs:
       - name: 🎬 Download libmpv x86
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240317/mpv-dev-i686-20240317-git-a3134e7.7z" -OutFile mpv.7z -TimeoutSec 120
+          $releases = Invoke-RestMethod "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases?per_page=20"
+          $url = $null
+          foreach ($rel in $releases) {
+            $asset = $rel.assets | Where-Object { $_.name -match "mpv-dev-i686.*\.7z$" } | Select-Object -First 1
+            if ($asset) { $url = $asset.browser_download_url; break }
+          }
+          if (-not $url) { throw "Could not find libmpv x86 release" }
+          Write-Host "Downloading: $url"
+          Invoke-WebRequest $url -OutFile mpv.7z -TimeoutSec 180
           7z x mpv.7z -ompv -y | Out-Null
           New-Item -Force -ItemType Directory "deps\libmpv\i686\include" | Out-Null
           Copy-Item "mpv\include\*" "deps\libmpv\i686\include\" -Recurse -Force
