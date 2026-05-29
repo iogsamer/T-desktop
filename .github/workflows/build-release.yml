@@ -14,12 +14,12 @@ on:
 env:
   PROJECT_NAME: darkflix
   APP_DISPLAY_NAME: DarkFlix
+  WEBVIEW2_VERSION: 1.0.2849.39
 
 permissions:
   contents: write
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────
   build-x64:
     name: 🏗️ Build x64
     runs-on: windows-latest
@@ -30,224 +30,140 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      # ── Get version from CMakeLists.txt ──────────────────────────
       - name: 🔢 Get version
         id: get_version
         shell: pwsh
         run: |
-          $cmake = Get-Content CMakeLists.txt -Raw
-          if ($cmake -match 'project\s*\(\s*\w+\s+VERSION\s+"?([\d.]+)"?') {
-            $ver = $matches[1]
+          $raw = Get-Content CMakeLists.txt -Raw
+          if ($raw -match 'project\s*\(\s*\w+\s+VERSION\s+"?([\d.]+)"?') {
+            $ver = $Matches[1]
           } else {
             $ver = "${{ github.event.inputs.version }}"
             if (-not $ver) { $ver = "5.0.21" }
           }
-          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          "version=$ver" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
           Write-Host "Version: $ver"
 
-      # ── Setup MSVC ────────────────────────────────────────────────
       - name: 🛠️ Setup MSVC x64
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      # ── Install Ninja ─────────────────────────────────────────────
       - name: ⚡ Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@v4
 
-      # ── Setup vcpkg + install all deps in one reliable step ────────
       - name: 💾 Cache vcpkg
         uses: actions/cache@v4
-        id: vcpkg-cache
         with:
           path: ${{ github.workspace }}/vcpkg
-          key: vcpkg-x64-${{ hashFiles('CMakeLists.txt') }}-v6
-          restore-keys: vcpkg-x64-
+          key: vcpkg-x64-v7-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: vcpkg-x64-v7-
 
       - name: 📦 Bootstrap vcpkg
         shell: pwsh
         run: |
-          $dir = "${{ github.workspace }}\vcpkg"
-          if (Test-Path "$dir\vcpkg.exe") {
-            Write-Host "✅ vcpkg from cache"
-            & "$dir\vcpkg.exe" version
+          $dir = Join-Path $env:GITHUB_WORKSPACE "vcpkg"
+          $exe = Join-Path $dir "vcpkg.exe"
+          if (Test-Path $exe) {
+            Write-Host "vcpkg from cache"
           } else {
-            Write-Host "Cloning vcpkg..."
-            if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
-            git clone https://github.com/microsoft/vcpkg $dir --depth=1 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
-            Write-Host "Running bootstrap..."
-            $bat = "$dir\bootstrap-vcpkg.bat"
-            cmd /c "$bat -disableMetrics" 2>&1
-            if (-not (Test-Path "$dir\vcpkg.exe")) { throw "bootstrap failed - vcpkg.exe not found" }
-            Write-Host "✅ vcpkg bootstrapped"
-            & "$dir\vcpkg.exe" version
+            git clone https://github.com/microsoft/vcpkg $dir --depth=1
+            cmd /c "`"$dir\bootstrap-vcpkg.bat`" -disableMetrics"
           }
+          & $exe version
+          Add-Content $env:GITHUB_PATH $dir
 
-      - name: 📦 Install vcpkg deps (openssl + curl + json)
+      - name: 📦 Install vcpkg packages
         shell: pwsh
         run: |
-          $vcpkg = "${{ github.workspace }}\vcpkg\vcpkg.exe"
-          Write-Host "vcpkg path: $vcpkg"
-          Write-Host "Exists: $(Test-Path $vcpkg)"
+          $vcpkg = Join-Path $env:GITHUB_WORKSPACE "vcpkg\vcpkg.exe"
           & $vcpkg install openssl:x64-windows-static curl:x64-windows-static nlohmann-json:x64-windows-static --triplet x64-windows-static
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed with code $LASTEXITCODE" }
-          Write-Host "✅ Base packages installed"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+          Write-Host "✅ vcpkg packages installed"
 
-      - name: 📦 Install WebView2 SDK via NuGet
+      - name: 📦 Install WebView2 via NuGet
         shell: pwsh
         run: |
-          # Download WebView2 SDK from NuGet (more reliable than vcpkg for this package)
-          $wv2Dir = "${{ github.workspace }}\webview2-sdk"
-          New-Item -ItemType Directory -Force -Path $wv2Dir | Out-Null
-          nuget install Microsoft.Web.WebView2 -Version 1.0.2849.39 -OutputDirectory $wv2Dir -NonInteractive
-          $pkgDir = Get-ChildItem $wv2Dir -Filter "Microsoft.Web.WebView2.*" | Select-Object -First 1
-          if (-not $pkgDir) { throw "WebView2 NuGet package not found" }
-          $wv2Root = $pkgDir.FullName
-          Write-Host "WebView2 SDK at: $wv2Root"
-          
-          # Set env var for cmake step
-          echo "WEBVIEW2_ROOT=$wv2Root" >> $env:GITHUB_ENV
-          
-          # Create unofficial-webview2 cmake config so find_package works
-          $vcpkgInstalledX64 = "${{ github.workspace }}\vcpkg\installed\x64-windows-static"
-          $cmakeDir = "$vcpkgInstalledX64\share\unofficial-webview2"
-          New-Item -ItemType Directory -Force -Path $cmakeDir | Out-Null
-          New-Item -ItemType Directory -Force -Path "$vcpkgInstalledX64\include" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$vcpkgInstalledX64\lib" | Out-Null
-          
-          # Copy headers
-          Copy-Item "$wv2Root\build\native\include\*" "$vcpkgInstalledX64\include" -Recurse -Force
-          
-          # Copy static lib
-          $staticLib = "$wv2Root\build\native\x64\WebView2LoaderStatic.lib"
-          if (Test-Path $staticLib) {
-            Copy-Item $staticLib "$vcpkgInstalledX64\lib\WebView2LoaderStatic.lib"
-            Write-Host "✅ Static lib copied"
-          } else {
-            # Use import lib
-            $importLib = Get-ChildItem "$wv2Root\build\native\x64" -Filter "*.lib" | Select-Object -First 1
-            if ($importLib) { Copy-Item $importLib.FullName "$vcpkgInstalledX64\lib\WebView2Loader.lib" }
+          $out = Join-Path $env:GITHUB_WORKSPACE "nuget_wv2"
+          nuget install Microsoft.Web.WebView2 -Version $env:WEBVIEW2_VERSION -OutputDirectory $out -NonInteractive
+          $pkg = (Get-ChildItem $out -Filter "Microsoft.Web.WebView2.*" | Select-Object -First 1).FullName
+          if (-not $pkg) { throw "WebView2 NuGet not found" }
+          $ins = Join-Path $env:GITHUB_WORKSPACE "vcpkg\installed\x64-windows-static"
+          New-Item -Force -ItemType Directory "$ins\include" | Out-Null
+          New-Item -Force -ItemType Directory "$ins\lib"     | Out-Null
+          New-Item -Force -ItemType Directory "$ins\share\unofficial-webview2" | Out-Null
+          Copy-Item "$pkg\build\native\include\*" "$ins\include\" -Recurse -Force
+          if (Test-Path "$pkg\build\native\x64\WebView2LoaderStatic.lib") {
+            Copy-Item "$pkg\build\native\x64\WebView2LoaderStatic.lib" "$ins\lib\"
           }
-          
-          # Write cmake config file
-          $cmakeConfig = @"
-# unofficial-webview2 cmake config (generated from NuGet)
-if(NOT TARGET unofficial::webview2::webview2)
-  add_library(unofficial::webview2::webview2 INTERFACE IMPORTED)
-  set_target_properties(unofficial::webview2::webview2 PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "$($vcpkgInstalledX64 -replace '\\','/')/include"
-    INTERFACE_LINK_LIBRARIES "$($vcpkgInstalledX64 -replace '\\','/')/lib/WebView2LoaderStatic.lib"
-  )
-endif()
-"@
-          Set-Content "$cmakeDir\unofficial-webview2-config.cmake" $cmakeConfig
-          Set-Content "$cmakeDir\unofficial-webview2-config-version.cmake" @"
-set(PACKAGE_VERSION "1.0.2849.39")
-set(PACKAGE_VERSION_COMPATIBLE TRUE)
-set(PACKAGE_VERSION_EXACT TRUE)
-"@
-          Write-Host "✅ unofficial-webview2 cmake config created"
-          Get-ChildItem $cmakeDir
+          Copy-Item ".github\cmake\unofficial-webview2-config.cmake"         "$ins\share\unofficial-webview2\"
+          Copy-Item ".github\cmake\unofficial-webview2-config-version.cmake" "$ins\share\unofficial-webview2\"
+          Write-Host "✅ WebView2 cmake config installed"
 
-      # ── Download libmpv x64 ───────────────────────────────────────
       - name: 🎬 Download libmpv x64
         shell: pwsh
         run: |
-          $url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240317/mpv-dev-x86_64-20240317-git-a3134e7.7z"
-          Invoke-WebRequest $url -OutFile mpv-dev-x64.7z -TimeoutSec 120
-          7z x mpv-dev-x64.7z -ompv-x64 -y | Out-Null
-          New-Item -ItemType Directory -Force -Path deps/libmpv/x86_64/include | Out-Null
-          Copy-Item mpv-x64/include/* deps/libmpv/x86_64/include/ -Recurse -Force
-          Copy-Item mpv-x64/libmpv.dll.a deps/libmpv/x86_64/mpv.lib  -ErrorAction SilentlyContinue
-          # try both naming conventions
-          $dllSrc = Get-ChildItem mpv-x64 -Filter "libmpv*.dll" | Select-Object -First 1
-          if ($dllSrc) { Copy-Item $dllSrc.FullName deps/libmpv/x86_64/libmpv-2.dll }
-          Write-Host "✅ libmpv x64 ready"
+          Invoke-WebRequest "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240317/mpv-dev-x86_64-20240317-git-a3134e7.7z" -OutFile mpv.7z -TimeoutSec 120
+          7z x mpv.7z -ompv -y | Out-Null
+          New-Item -Force -ItemType Directory "deps\libmpv\x86_64\include" | Out-Null
+          Copy-Item "mpv\include\*" "deps\libmpv\x86_64\include\" -Recurse -Force
+          Copy-Item "mpv\libmpv.dll.a" "deps\libmpv\x86_64\mpv.lib" -ErrorAction SilentlyContinue
+          $dll = Get-ChildItem mpv -Filter "libmpv*.dll" | Select-Object -First 1
+          if ($dll) { Copy-Item $dll.FullName "deps\libmpv\x86_64\libmpv-2.dll" }
+          Write-Host "✅ libmpv x64"
 
-      # ── Download Discord RPC ──────────────────────────────────────
       - name: 💬 Download Discord RPC
         shell: pwsh
         run: |
-          $url = "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip"
-          Invoke-WebRequest $url -OutFile discord-rpc.zip -TimeoutSec 60
-          Expand-Archive discord-rpc.zip -DestinationPath discord-rpc-raw
-          New-Item -ItemType Directory -Force -Path deps/discord-rpc/win64-static/lib    | Out-Null
-          New-Item -ItemType Directory -Force -Path deps/discord-rpc/win64-static/include | Out-Null
-          Copy-Item discord-rpc-raw/discord-rpc/win64-static/lib/discord-rpc.lib  deps/discord-rpc/win64-static/lib/
-          Copy-Item discord-rpc-raw/discord-rpc/include/*                          deps/discord-rpc/win64-static/include/ -Recurse
-          Write-Host "✅ Discord RPC ready"
+          Invoke-WebRequest "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip" -OutFile drpc.zip -TimeoutSec 60
+          Expand-Archive drpc.zip -DestinationPath drpc
+          New-Item -Force -ItemType Directory "deps\discord-rpc\win64-static\lib"     | Out-Null
+          New-Item -Force -ItemType Directory "deps\discord-rpc\win64-static\include"  | Out-Null
+          Copy-Item "drpc\discord-rpc\win64-static\lib\discord-rpc.lib"  "deps\discord-rpc\win64-static\lib\"
+          Copy-Item "drpc\discord-rpc\include\*" "deps\discord-rpc\win64-static\include\" -Recurse
+          Write-Host "✅ Discord RPC"
 
-      # ── CMake configure ───────────────────────────────────────────
       - name: ⚙️ CMake Configure x64
         shell: pwsh
         run: |
-          $toolchain = "${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake"
-          Write-Host "Toolchain: $toolchain (exists: $(Test-Path $toolchain))"
-          cmake -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-            -B cmake-build-x64 `
-            -S .
+          $tc = Join-Path $env:GITHUB_WORKSPACE "vcpkg\scripts\buildsystems\vcpkg.cmake"
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_TOOLCHAIN_FILE=$tc" -DVCPKG_TARGET_TRIPLET=x64-windows-static -B cmake-build-x64 -S .
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
-      # ── Build ─────────────────────────────────────────────────────
       - name: 🔨 Build x64
         shell: pwsh
-        run: cmake --build cmake-build-x64 --config Release --parallel
+        run: |
+          cmake --build cmake-build-x64 --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 
-      # ── Install auth server deps ──────────────────────────────────
       - name: 📦 Auth server npm install
         shell: pwsh
         run: |
-          if (Test-Path "packages/darkflix-auth/package.json") {
-            cd packages/darkflix-auth
-            npm install --omit=dev --ignore-scripts
-            Write-Host "✅ auth server deps installed"
+          if (Test-Path "packages\darkflix-auth\package.json") {
+            Push-Location "packages\darkflix-auth"; npm install --omit=dev --ignore-scripts; Pop-Location
           }
 
-      # ── Download node.exe for auth server ────────────────────────
       - name: ⬇️ Download node.exe
         shell: pwsh
         run: |
-          $url = "https://nodejs.org/dist/v22.12.0/node-v22.12.0-win-x64.zip"
-          Invoke-WebRequest $url -OutFile node-win.zip -TimeoutSec 120
-          Expand-Archive node-win.zip -DestinationPath node-win-tmp
-          Copy-Item "node-win-tmp/node-v22.12.0-win-x64/node.exe" "cmake-build-x64/node.exe"
-          Write-Host "✅ node.exe bundled"
+          Invoke-WebRequest "https://nodejs.org/dist/v22.12.0/node-v22.12.0-win-x64.zip" -OutFile node.zip -TimeoutSec 120
+          Expand-Archive node.zip -DestinationPath node-tmp
+          Copy-Item "node-tmp\node-v22.12.0-win-x64\node.exe" "cmake-build-x64\node.exe"
 
-      # ── Prepare dist folder ───────────────────────────────────────
       - name: 📁 Prepare dist x64
         shell: pwsh
         run: |
           $dist = "dist-x64"
-          New-Item -ItemType Directory -Force -Path $dist | Out-Null
-
-          # Main exe + node
-          Copy-Item "cmake-build-x64/${{ env.PROJECT_NAME }}.exe" "$dist/" -ErrorAction SilentlyContinue
-          if (-not (Test-Path "$dist/${{ env.PROJECT_NAME }}.exe")) {
-            # Try alternative name
-            $exe = Get-ChildItem cmake-build-x64 -Filter "*.exe" | Where-Object { $_.Name -ne "node.exe" } | Select-Object -First 1
-            if ($exe) { Copy-Item $exe.FullName "$dist/${{ env.PROJECT_NAME }}.exe" }
-          }
-          Copy-Item "cmake-build-x64/node.exe"    "$dist/"
-          Copy-Item "deps/libmpv/x86_64/libmpv-2.dll" "$dist/" -ErrorAction SilentlyContinue
-
-          # Runtime server
-          @("stremio-runtime.exe","server.js") | ForEach-Object {
-            if (Test-Path "utils/windows/$_") { Copy-Item "utils/windows/$_" "$dist/" }
-          }
-
-          # Auth server package
-          if (Test-Path "packages/darkflix-auth") {
-            Copy-Item "packages/darkflix-auth" "$dist/packages/darkflix-auth" -Recurse -Force
-          }
-
-          Write-Host "✅ dist x64:"
+          New-Item -Force -ItemType Directory $dist | Out-Null
+          $exe = Get-ChildItem "cmake-build-x64" -Filter "*.exe" | Where-Object { $_.Name -ne "node.exe" } | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName "$dist\${{ env.PROJECT_NAME }}.exe" }
+          @("node.exe") | ForEach-Object { if (Test-Path "cmake-build-x64\$_") { Copy-Item "cmake-build-x64\$_" $dist } }
+          if (Test-Path "deps\libmpv\x86_64\libmpv-2.dll") { Copy-Item "deps\libmpv\x86_64\libmpv-2.dll" $dist }
+          if (Test-Path "utils\windows\stremio-runtime.exe") { Copy-Item "utils\windows\stremio-runtime.exe" $dist }
+          if (Test-Path "utils\windows\server.js") { Copy-Item "utils\windows\server.js" $dist }
+          if (Test-Path "packages\darkflix-auth") { Copy-Item "packages\darkflix-auth" "$dist\packages\darkflix-auth" -Recurse }
           Get-ChildItem $dist | Format-Table Name, Length
 
-      # ── Build NSIS installer ──────────────────────────────────────
       - name: 📦 Install NSIS
         run: choco install nsis -y --no-progress --quiet
 
@@ -257,15 +173,9 @@ set(PACKAGE_VERSION_EXACT TRUE)
           package_version: ${{ steps.get_version.outputs.version }}
           arch: x64
         run: |
-          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
-          if (Test-Path $nsis) {
-            & $nsis "utils/windows/installer/windows-installer.nsi"
-            Write-Host "✅ Installer built"
-          } else {
-            Write-Host "⚠️ NSIS not found, skipping installer"
-          }
+          $n = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (Test-Path $n) { & $n "utils\windows\installer\windows-installer.nsi" }
 
-      # ── Upload artifacts ──────────────────────────────────────────
       - name: 📤 Upload exe
         uses: actions/upload-artifact@v4
         with:
@@ -274,7 +184,7 @@ set(PACKAGE_VERSION_EXACT TRUE)
           if-no-files-found: warn
           retention-days: 30
 
-      - name: 📤 Upload installer
+      - name: 📤 Upload installer x64
         uses: actions/upload-artifact@v4
         with:
           name: DarkFlix-${{ steps.get_version.outputs.version }}-x64-setup
@@ -282,7 +192,6 @@ set(PACKAGE_VERSION_EXACT TRUE)
           if-no-files-found: warn
           retention-days: 30
 
-  # ─────────────────────────────────────────────────────────────────
   build-x86:
     name: 🏗️ Build x86
     runs-on: windows-latest
@@ -296,12 +205,10 @@ set(PACKAGE_VERSION_EXACT TRUE)
         id: get_version
         shell: pwsh
         run: |
-          $cmake = Get-Content CMakeLists.txt -Raw
-          if ($cmake -match 'project\s*\(\s*\w+\s+VERSION\s+"?([\d.]+)"?') {
-            echo "version=$($matches[1])" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "version=5.0.21" >> $env:GITHUB_OUTPUT
-          }
+          $raw = Get-Content CMakeLists.txt -Raw
+          if ($raw -match 'project\s*\(\s*\w+\s+VERSION\s+"?([\d.]+)"?') {
+            "version=$($Matches[1])" | Out-File -Append $env:GITHUB_OUTPUT
+          } else { "version=5.0.21" | Out-File -Append $env:GITHUB_OUTPUT }
 
       - name: 🛠️ Setup MSVC x86
         uses: ilammy/msvc-dev-cmd@v1
@@ -313,61 +220,71 @@ set(PACKAGE_VERSION_EXACT TRUE)
 
       - name: 💾 Cache vcpkg x86
         uses: actions/cache@v4
-        id: vcpkg-cache
         with:
           path: ${{ github.workspace }}/vcpkg
-          key: vcpkg-x86-${{ hashFiles('CMakeLists.txt') }}-v5
-          restore-keys: vcpkg-x86-
+          key: vcpkg-x86-v7-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: vcpkg-x86-v7-
 
-      - name: 📦 Bootstrap & Install vcpkg x86
+      - name: 📦 Bootstrap vcpkg x86
         shell: pwsh
         run: |
-          $vcpkgDir = "${{ github.workspace }}\vcpkg"
-          $vcpkgExe = "$vcpkgDir\vcpkg.exe"
-          if (-not (Test-Path $vcpkgExe)) {
-            git clone https://github.com/microsoft/vcpkg $vcpkgDir --depth=1
-            & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
-          } else {
-            Write-Host "vcpkg from cache"
+          $dir = Join-Path $env:GITHUB_WORKSPACE "vcpkg"
+          if (-not (Test-Path "$dir\vcpkg.exe")) {
+            git clone https://github.com/microsoft/vcpkg $dir --depth=1
+            cmd /c "`"$dir\bootstrap-vcpkg.bat`" -disableMetrics"
           }
-          & $vcpkgExe install `
-            openssl:x86-windows-static `
-            curl:x86-windows-static `
-            nlohmann-json:x86-windows-static `
-            unofficial-webview2:x86-windows-static `
-            --triplet x86-windows-static `
-            --no-print-usage
+          Add-Content $env:GITHUB_PATH $dir
+
+      - name: 📦 Install vcpkg packages x86
+        shell: pwsh
+        run: |
+          $vcpkg = Join-Path $env:GITHUB_WORKSPACE "vcpkg\vcpkg.exe"
+          & $vcpkg install openssl:x86-windows-static curl:x86-windows-static nlohmann-json:x86-windows-static --triplet x86-windows-static
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+
+      - name: 📦 Install WebView2 via NuGet x86
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE "nuget_wv2"
+          nuget install Microsoft.Web.WebView2 -Version ${{ env.WEBVIEW2_VERSION }} -OutputDirectory $out -NonInteractive
+          $pkg = (Get-ChildItem $out -Filter "Microsoft.Web.WebView2.*" | Select-Object -First 1).FullName
+          $ins = Join-Path $env:GITHUB_WORKSPACE "vcpkg\installed\x86-windows-static"
+          New-Item -Force -ItemType Directory "$ins\include" | Out-Null
+          New-Item -Force -ItemType Directory "$ins\lib"     | Out-Null
+          New-Item -Force -ItemType Directory "$ins\share\unofficial-webview2" | Out-Null
+          Copy-Item "$pkg\build\native\include\*" "$ins\include\" -Recurse -Force
+          if (Test-Path "$pkg\build\native\x86\WebView2LoaderStatic.lib") {
+            Copy-Item "$pkg\build\native\x86\WebView2LoaderStatic.lib" "$ins\lib\"
+          }
+          Copy-Item ".github\cmake\unofficial-webview2-config.cmake"         "$ins\share\unofficial-webview2\"
+          Copy-Item ".github\cmake\unofficial-webview2-config-version.cmake" "$ins\share\unofficial-webview2\"
 
       - name: 🎬 Download libmpv x86
         shell: pwsh
         run: |
-          $url = "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240317/mpv-dev-i686-20240317-git-a3134e7.7z"
-          Invoke-WebRequest $url -OutFile mpv-dev-x86.7z -TimeoutSec 120
-          7z x mpv-dev-x86.7z -ompv-x86 -y | Out-Null
-          New-Item -ItemType Directory -Force -Path deps/libmpv/i686/include | Out-Null
-          Copy-Item mpv-x86/include/* deps/libmpv/i686/include/ -Recurse -Force
-          Copy-Item mpv-x86/libmpv.dll.a deps/libmpv/i686/mpv.lib -ErrorAction SilentlyContinue
-          $dll = Get-ChildItem mpv-x86 -Filter "libmpv*.dll" | Select-Object -First 1
-          if ($dll) { Copy-Item $dll.FullName deps/libmpv/i686/libmpv-2.dll }
+          Invoke-WebRequest "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240317/mpv-dev-i686-20240317-git-a3134e7.7z" -OutFile mpv.7z -TimeoutSec 120
+          7z x mpv.7z -ompv -y | Out-Null
+          New-Item -Force -ItemType Directory "deps\libmpv\i686\include" | Out-Null
+          Copy-Item "mpv\include\*" "deps\libmpv\i686\include\" -Recurse -Force
+          Copy-Item "mpv\libmpv.dll.a" "deps\libmpv\i686\mpv.lib" -ErrorAction SilentlyContinue
+          $dll = Get-ChildItem mpv -Filter "libmpv*.dll" | Select-Object -First 1
+          if ($dll) { Copy-Item $dll.FullName "deps\libmpv\i686\libmpv-2.dll" }
 
       - name: 💬 Download Discord RPC x86
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip" -OutFile d.zip -TimeoutSec 60
-          Expand-Archive d.zip -DestinationPath drpc
-          New-Item -Force -ItemType Directory -Path deps/discord-rpc/win32-static/lib    | Out-Null
-          New-Item -Force -ItemType Directory -Path deps/discord-rpc/win32-static/include | Out-Null
-          Copy-Item drpc/discord-rpc/win32-static/lib/discord-rpc.lib  deps/discord-rpc/win32-static/lib/
-          Copy-Item drpc/discord-rpc/include/*                          deps/discord-rpc/win32-static/include/ -Recurse
+          Invoke-WebRequest "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip" -OutFile drpc.zip -TimeoutSec 60
+          Expand-Archive drpc.zip -DestinationPath drpc
+          New-Item -Force -ItemType Directory "deps\discord-rpc\win32-static\lib"     | Out-Null
+          New-Item -Force -ItemType Directory "deps\discord-rpc\win32-static\include"  | Out-Null
+          Copy-Item "drpc\discord-rpc\win32-static\lib\discord-rpc.lib"  "deps\discord-rpc\win32-static\lib\"
+          Copy-Item "drpc\discord-rpc\include\*" "deps\discord-rpc\win32-static\include\" -Recurse
 
       - name: ⚙️ CMake Configure x86
         shell: pwsh
         run: |
-          cmake -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            "-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x86-windows-static `
-            -B cmake-build-x86 -S .
+          $tc = Join-Path $env:GITHUB_WORKSPACE "vcpkg\scripts\buildsystems\vcpkg.cmake"
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_TOOLCHAIN_FILE=$tc" -DVCPKG_TARGET_TRIPLET=x86-windows-static -B cmake-build-x86 -S .
 
       - name: 🔨 Build x86
         shell: pwsh
@@ -382,10 +299,10 @@ set(PACKAGE_VERSION_EXACT TRUE)
           package_version: ${{ steps.get_version.outputs.version }}
           arch: x86
         run: |
-          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
-          if (Test-Path $nsis) { & $nsis "utils/windows/installer/windows-installer.nsi" }
+          $n = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (Test-Path $n) { & $n "utils\windows\installer\windows-installer.nsi" }
 
-      - name: 📤 Upload x86 setup
+      - name: 📤 Upload installer x86
         uses: actions/upload-artifact@v4
         with:
           name: DarkFlix-${{ steps.get_version.outputs.version }}-x86-setup
@@ -393,7 +310,6 @@ set(PACKAGE_VERSION_EXACT TRUE)
           if-no-files-found: warn
           retention-days: 30
 
-  # ─────────────────────────────────────────────────────────────────
   release:
     name: 🚀 Publish Release
     runs-on: ubuntu-latest
@@ -401,23 +317,11 @@ set(PACKAGE_VERSION_EXACT TRUE)
     if: startsWith(github.ref, 'refs/tags/')
 
     steps:
-      - name: ⬇️ Download x64 setup
+      - name: ⬇️ Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: DarkFlix-${{ needs.build-x64.outputs.version }}-x64-setup
           path: release/
-
-      - name: ⬇️ Download x86 setup
-        uses: actions/download-artifact@v4
-        with:
-          name: DarkFlix-${{ needs.build-x64.outputs.version }}-x86-setup
-          path: release/
-
-      - name: ⬇️ Download x64 exe
-        uses: actions/download-artifact@v4
-        with:
-          name: DarkFlix-${{ needs.build-x64.outputs.version }}-x64-exe
-          path: release/
+          merge-multiple: true
 
       - name: 📋 Checksums
         run: cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
@@ -428,23 +332,18 @@ set(PACKAGE_VERSION_EXACT TRUE)
           name: "🎬 DarkFlix v${{ needs.build-x64.outputs.version }}"
           body: |
             ## 🎬 DarkFlix v${{ needs.build-x64.outputs.version }}
-
-            ### 📥 Downloads
             | File | Arch | Type |
             |------|------|------|
-            | `DarkFlix ${{ needs.build-x64.outputs.version }}-x64.exe` | 64-bit | 🪟 Installer |
-            | `DarkFlix ${{ needs.build-x64.outputs.version }}-x86.exe` | 32-bit | 🪟 Installer |
-            | `darkflix.exe` | 64-bit | ⚡ Portable |
+            | `DarkFlix ${{ needs.build-x64.outputs.version }}-x64.exe` | 64-bit | Installer |
+            | `DarkFlix ${{ needs.build-x64.outputs.version }}-x86.exe` | 32-bit | Installer |
+            | `darkflix.exe` | 64-bit | Portable |
 
-            ### ✨ Features
-            - 🟠 Orange dark theme
-            - 🔐 Google Sign-In
-            - 📺 Built-in OpenSubtitles Pro (Arabic)
-            - 🌊 Built-in Torrentio (Quality + Arabic)
-            - 🎞️ MPV 4K hardware decoding
-
-            ### 📋 SHA256
-            See `SHA256SUMS.txt` in assets.
+            ### Features
+            - Orange dark theme
+            - Google Sign-In
+            - OpenSubtitles Pro (Arabic) built-in
+            - Torrentio (quality+Arabic) built-in
+            - MPV 4K hardware decoding
           files: release/*
           draft: false
           prerelease: false
