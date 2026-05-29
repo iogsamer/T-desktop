@@ -94,20 +94,61 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed with code $LASTEXITCODE" }
           Write-Host "✅ Base packages installed"
 
-      - name: 📦 Install vcpkg webview2
+      - name: 📦 Install WebView2 SDK via NuGet
         shell: pwsh
         run: |
-          $vcpkg = "${{ github.workspace }}\vcpkg\vcpkg.exe"
-          Write-Host "Installing unofficial-webview2..."
-          & $vcpkg install unofficial-webview2:x64-windows-static
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "⚠️ unofficial-webview2 failed, trying x64-windows..."
-            & $vcpkg install unofficial-webview2:x64-windows
-            if ($LASTEXITCODE -ne 0) { throw "webview2 install failed" }
-            Write-Host "✅ unofficial-webview2 (dynamic) installed"
+          # Download WebView2 SDK from NuGet (more reliable than vcpkg for this package)
+          $wv2Dir = "${{ github.workspace }}\webview2-sdk"
+          New-Item -ItemType Directory -Force -Path $wv2Dir | Out-Null
+          nuget install Microsoft.Web.WebView2 -Version 1.0.2849.39 -OutputDirectory $wv2Dir -NonInteractive
+          $pkgDir = Get-ChildItem $wv2Dir -Filter "Microsoft.Web.WebView2.*" | Select-Object -First 1
+          if (-not $pkgDir) { throw "WebView2 NuGet package not found" }
+          $wv2Root = $pkgDir.FullName
+          Write-Host "WebView2 SDK at: $wv2Root"
+          
+          # Set env var for cmake step
+          echo "WEBVIEW2_ROOT=$wv2Root" >> $env:GITHUB_ENV
+          
+          # Create unofficial-webview2 cmake config so find_package works
+          $vcpkgInstalledX64 = "${{ github.workspace }}\vcpkg\installed\x64-windows-static"
+          $cmakeDir = "$vcpkgInstalledX64\share\unofficial-webview2"
+          New-Item -ItemType Directory -Force -Path $cmakeDir | Out-Null
+          New-Item -ItemType Directory -Force -Path "$vcpkgInstalledX64\include" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$vcpkgInstalledX64\lib" | Out-Null
+          
+          # Copy headers
+          Copy-Item "$wv2Root\build\native\include\*" "$vcpkgInstalledX64\include" -Recurse -Force
+          
+          # Copy static lib
+          $staticLib = "$wv2Root\build\native\x64\WebView2LoaderStatic.lib"
+          if (Test-Path $staticLib) {
+            Copy-Item $staticLib "$vcpkgInstalledX64\lib\WebView2LoaderStatic.lib"
+            Write-Host "✅ Static lib copied"
           } else {
-            Write-Host "✅ unofficial-webview2 (static) installed"
+            # Use import lib
+            $importLib = Get-ChildItem "$wv2Root\build\native\x64" -Filter "*.lib" | Select-Object -First 1
+            if ($importLib) { Copy-Item $importLib.FullName "$vcpkgInstalledX64\lib\WebView2Loader.lib" }
           }
+          
+          # Write cmake config file
+          $cmakeConfig = @"
+# unofficial-webview2 cmake config (generated from NuGet)
+if(NOT TARGET unofficial::webview2::webview2)
+  add_library(unofficial::webview2::webview2 INTERFACE IMPORTED)
+  set_target_properties(unofficial::webview2::webview2 PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "$($vcpkgInstalledX64 -replace '\\','/')/include"
+    INTERFACE_LINK_LIBRARIES "$($vcpkgInstalledX64 -replace '\\','/')/lib/WebView2LoaderStatic.lib"
+  )
+endif()
+"@
+          Set-Content "$cmakeDir\unofficial-webview2-config.cmake" $cmakeConfig
+          Set-Content "$cmakeDir\unofficial-webview2-config-version.cmake" @"
+set(PACKAGE_VERSION "1.0.2849.39")
+set(PACKAGE_VERSION_COMPATIBLE TRUE)
+set(PACKAGE_VERSION_EXACT TRUE)
+"@
+          Write-Host "✅ unofficial-webview2 cmake config created"
+          Get-ChildItem $cmakeDir
 
       # ── Download libmpv x64 ───────────────────────────────────────
       - name: 🎬 Download libmpv x64
@@ -142,13 +183,11 @@ jobs:
         shell: pwsh
         run: |
           $toolchain = "${{ github.workspace }}\vcpkg\scripts\buildsystems\vcpkg.cmake"
-          Write-Host "Toolchain: $toolchain"
-          Write-Host "Exists: $(Test-Path $toolchain)"
+          Write-Host "Toolchain: $toolchain (exists: $(Test-Path $toolchain))"
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-            "-DVCPKG_HOST_TRIPLET=x64-windows" `
             -B cmake-build-x64 `
             -S .
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
