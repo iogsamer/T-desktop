@@ -121,16 +121,21 @@ jobs:
           if ($dll) { Copy-Item $dll.FullName "deps\libmpv\x86_64\libmpv-2.dll" }
           Write-Host "✅ libmpv x64 ready"
 
-      - name: 💬 Download Discord RPC
+      - name: 💬 Build Discord RPC from source
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip" -OutFile drpc.zip -TimeoutSec 60
-          Expand-Archive drpc.zip -DestinationPath drpc
+          git clone https://github.com/discord/discord-rpc.git drpc-src --depth=1
+          cmake -S drpc-src -B drpc-build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake --build drpc-build --config Release --parallel
           New-Item -Force -ItemType Directory "deps\discord-rpc\win64-static\lib"     | Out-Null
           New-Item -Force -ItemType Directory "deps\discord-rpc\win64-static\include"  | Out-Null
-          Copy-Item "drpc\discord-rpc\win64-static\lib\discord-rpc.lib"  "deps\discord-rpc\win64-static\lib\"
-          Copy-Item "drpc\discord-rpc\include\*" "deps\discord-rpc\win64-static\include\" -Recurse
-          Write-Host "✅ Discord RPC"
+          $lib = Get-ChildItem drpc-build -Filter "discord-rpc.lib" -Recurse | Select-Object -First 1
+          if ($lib) { Copy-Item $lib.FullName "deps\discord-rpc\win64-static\lib\discord-rpc.lib" }
+          Copy-Item "drpc-src\include\*" "deps\discord-rpc\win64-static\include\" -Recurse
+          Write-Host "✅ Discord RPC built from source"
 
       - name: ⚙️ CMake Configure x64
         shell: pwsh
@@ -287,15 +292,20 @@ jobs:
           $dll = Get-ChildItem mpv -Filter "libmpv*.dll" | Select-Object -First 1
           if ($dll) { Copy-Item $dll.FullName "deps\libmpv\i686\libmpv-2.dll" }
 
-      - name: 💬 Download Discord RPC x86
+      - name: 💬 Build Discord RPC x86 from source
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://github.com/discord/discord-rpc/releases/download/v3.4.0/discord-rpc-win.zip" -OutFile drpc.zip -TimeoutSec 60
-          Expand-Archive drpc.zip -DestinationPath drpc
+          git clone https://github.com/discord/discord-rpc.git drpc-src --depth=1
+          cmake -S drpc-src -B drpc-build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake --build drpc-build --config Release --parallel
           New-Item -Force -ItemType Directory "deps\discord-rpc\win32-static\lib"     | Out-Null
           New-Item -Force -ItemType Directory "deps\discord-rpc\win32-static\include"  | Out-Null
-          Copy-Item "drpc\discord-rpc\win32-static\lib\discord-rpc.lib"  "deps\discord-rpc\win32-static\lib\"
-          Copy-Item "drpc\discord-rpc\include\*" "deps\discord-rpc\win32-static\include\" -Recurse
+          $lib = Get-ChildItem drpc-build -Filter "discord-rpc.lib" -Recurse | Select-Object -First 1
+          if ($lib) { Copy-Item $lib.FullName "deps\discord-rpc\win32-static\lib\discord-rpc.lib" }
+          Copy-Item "drpc-src\include\*" "deps\discord-rpc\win32-static\include\" -Recurse
 
       - name: ⚙️ CMake Configure x86
         shell: pwsh
