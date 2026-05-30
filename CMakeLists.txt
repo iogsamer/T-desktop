@@ -32,7 +32,40 @@ include_directories(${MPV_INCLUDE_DIR})
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(microsoft-webview2 CONFIG REQUIRED)
+# WebView2 — try vcpkg, then fall back to manually-installed NuGet SDK
+find_package(unofficial-webview2 CONFIG QUIET)
+if(NOT TARGET unofficial::webview2::webview2)
+  # Search in common locations (vcpkg installed dir, side-by-side, env)
+  set(_WV2_CANDIDATES
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
+    "${VCPKG_INSTALLED_DIR}/x64-windows-static"
+    "${VCPKG_INSTALLED_DIR}/x86-windows-static"
+    "$ENV{GITHUB_WORKSPACE}/vcpkg/installed/x64-windows-static"
+    "$ENV{GITHUB_WORKSPACE}/vcpkg/installed/x86-windows-static"
+  )
+  foreach(_WV2_DIR IN LISTS _WV2_CANDIDATES)
+    if(EXISTS "${_WV2_DIR}/include/WebView2.h")
+      add_library(unofficial::webview2::webview2 INTERFACE IMPORTED GLOBAL)
+      target_include_directories(unofficial::webview2::webview2 INTERFACE
+        "${_WV2_DIR}/include")
+      foreach(_LIB WebView2LoaderStatic.lib WebView2Loader.lib)
+        if(EXISTS "${_WV2_DIR}/lib/${_LIB}")
+          target_link_libraries(unofficial::webview2::webview2 INTERFACE
+            "${_WV2_DIR}/lib/${_LIB}")
+          break()
+        endif()
+      endforeach()
+      message(STATUS "unofficial-webview2: found at ${_WV2_DIR}")
+      break()
+    endif()
+  endforeach()
+  if(NOT TARGET unofficial::webview2::webview2)
+    message(FATAL_ERROR
+      "unofficial-webview2 not found.\n"
+      "Install via: vcpkg install unofficial-webview2:x64-windows-static\n"
+      "or NuGet: nuget install Microsoft.Web.WebView2")
+  endif()
+endif()
 
 set(SOURCES
         src/main.cpp
@@ -77,7 +110,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         winhttp.lib
         shlwapi.lib
         nlohmann_json::nlohmann_json
-        microsoft::webview2
+        unofficial::webview2::webview2
         OpenSSL::SSL
         OpenSSL::Crypto
         CURL::libcurl

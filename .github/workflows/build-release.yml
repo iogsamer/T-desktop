@@ -306,8 +306,15 @@ jobs:
       - name: ⚙️ CMake Configure x86
         shell: pwsh
         run: |
-          $tc = Join-Path $env:GITHUB_WORKSPACE "vcpkg\scripts\buildsystems\vcpkg.cmake"
-          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_TOOLCHAIN_FILE=$tc" -DVCPKG_TARGET_TRIPLET=x86-windows-static -B cmake-build-x86 -S .
+          $ws = $env:GITHUB_WORKSPACE
+          $tc = "$ws\vcpkg\scripts\buildsystems\vcpkg.cmake"
+          cmake -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_TOOLCHAIN_FILE=$tc" `
+            -DVCPKG_TARGET_TRIPLET=x86-windows-static `
+            "-DVCPKG_INSTALLED_DIR=$ws\vcpkg\installed" `
+            -B cmake-build-x86 -S . 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure x86 failed" }
 
       - name: 🔨 Build x86
         shell: pwsh
