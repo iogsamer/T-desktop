@@ -142,11 +142,53 @@ jobs:
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_TOOLCHAIN_FILE=$tc" -DVCPKG_TARGET_TRIPLET=x64-windows-static -B cmake-build-x64 -S .
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
+      - name: 🔍 Verify dependencies before build
+        shell: pwsh
+        run: |
+          $ws = $env:GITHUB_WORKSPACE
+          $ins = "$ws\vcpkg\installed\x64-windows-static"
+          $ok = $true
+          @(
+            "deps\libmpv\x86_64\mpv.lib",
+            "deps\libmpv\x86_64\include\mpv\client.h",
+            "deps\libmpv\x86_64\libmpv-2.dll",
+            "deps\discord-rpc\win64-static\lib\discord-rpc.lib"
+          ) | ForEach-Object {
+            $exists = Test-Path $_
+            Write-Host "$(if($exists){"OK"}else{"MISSING"}): $_"
+            if (-not $exists) { $ok = $false }
+          }
+          # Fix discord-rpc lib name if installed with different name
+          $discordLib = "deps\discord-rpc\win64-static\lib\discord-rpc.lib"
+          if (-not (Test-Path $discordLib)) {
+            $altNames = @("discord_rpc.lib","discord-rpc-static.lib","discord_rpc-static.lib")
+            foreach ($n in $altNames) {
+              $src = "deps\discord-rpc\win64-static\lib\$n"
+              if (Test-Path $src) {
+                Copy-Item $src $discordLib
+                Write-Host "Renamed $n to discord-rpc.lib"
+                $ok = $true; break
+              }
+            }
+            # Also check vcpkg installed dir
+            Get-ChildItem "$ins\lib" -Filter "discord*" | ForEach-Object {
+              Write-Host "Found in vcpkg: $($_.Name)"
+              if (-not (Test-Path $discordLib)) {
+                Copy-Item $_.FullName $discordLib
+              }
+            }
+          }
+          Write-Host "Discord include files:"
+          Get-ChildItem "deps\discord-rpc\win64-static\include" -ErrorAction SilentlyContinue
+          Write-Host "CMakeLists webview2 section:"
+          Select-String "webview2|WebView2|unofficial" CMakeLists.txt | Select-Object -First 5
+
       - name: 🔨 Build x64
         shell: pwsh
         run: |
-          cmake --build cmake-build-x64 --config Release --parallel
-          if ($LASTEXITCODE -ne 0) { throw "Build failed" }
+          cmake --build cmake-build-x64 --config Release --parallel 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "Build failed with code $LASTEXITCODE" }
+          Write-Host "✅ Build x64 complete"
 
       - name: 📦 Auth server npm install
         shell: pwsh
