@@ -1,29 +1,45 @@
 # unofficial-webview2 cmake config
-# Auto-generated from Microsoft.Web.WebView2 NuGet package
+# Installed from Microsoft.Web.WebView2 NuGet package
+
 cmake_minimum_required(VERSION 3.15)
 
-if(NOT TARGET unofficial::webview2::webview2)
-  add_library(unofficial::webview2::webview2 INTERFACE IMPORTED)
+if(TARGET unofficial::webview2::webview2)
+  return()
+endif()
 
-  # Find headers and libs relative to this file
-  get_filename_component(_wv2_dir "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
-  
-  set(_wv2_include "${_wv2_dir}/include")
-  set(_wv2_lib     "${_wv2_dir}/lib/WebView2LoaderStatic.lib")
-  
-  if(NOT EXISTS "${_wv2_include}/WebView2.h")
-    message(FATAL_ERROR "WebView2.h not found at ${_wv2_include}")
-  endif()
-  
-  target_include_directories(unofficial::webview2::webview2 INTERFACE "${_wv2_include}")
-  
-  if(EXISTS "${_wv2_lib}")
-    target_link_libraries(unofficial::webview2::webview2 INTERFACE "${_wv2_lib}")
+# This file lives at: <install_root>/share/unofficial-webview2/
+get_filename_component(_WV2_SHARE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+get_filename_component(_WV2_TRIPLET_DIR "${_WV2_SHARE_DIR}/../.." ABSOLUTE)
+
+set(_WV2_INCLUDE_DIR "${_WV2_TRIPLET_DIR}/include")
+set(_WV2_LIB_STATIC  "${_WV2_TRIPLET_DIR}/lib/WebView2LoaderStatic.lib")
+
+if(NOT EXISTS "${_WV2_INCLUDE_DIR}/WebView2.h")
+  message(FATAL_ERROR
+    "unofficial-webview2: WebView2.h not found at ${_WV2_INCLUDE_DIR}\n"
+    "  Install root: ${_WV2_TRIPLET_DIR}")
+endif()
+
+add_library(unofficial::webview2::webview2 INTERFACE IMPORTED GLOBAL)
+
+target_include_directories(unofficial::webview2::webview2 INTERFACE
+  "${_WV2_INCLUDE_DIR}"
+)
+
+if(EXISTS "${_WV2_LIB_STATIC}")
+  target_link_libraries(unofficial::webview2::webview2 INTERFACE
+    "${_WV2_LIB_STATIC}"
+  )
+else()
+  # Fallback: find any .lib in the lib directory
+  file(GLOB _WV2_LIBS "${_WV2_TRIPLET_DIR}/lib/WebView2*.lib")
+  if(_WV2_LIBS)
+    list(GET _WV2_LIBS 0 _WV2_FIRST_LIB)
+    target_link_libraries(unofficial::webview2::webview2 INTERFACE "${_WV2_FIRST_LIB}")
+    message(STATUS "unofficial-webview2: using fallback lib ${_WV2_FIRST_LIB}")
   else()
-    # Fallback to import lib
-    file(GLOB _wv2_import_lib "${_wv2_dir}/lib/*.lib")
-    if(_wv2_import_lib)
-      target_link_libraries(unofficial::webview2::webview2 INTERFACE "${_wv2_import_lib}")
-    endif()
+    message(WARNING "unofficial-webview2: no lib found, linking headers only")
   endif()
 endif()
+
+message(STATUS "unofficial-webview2 found: ${_WV2_INCLUDE_DIR}")
