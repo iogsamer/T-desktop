@@ -82,6 +82,7 @@ jobs:
             curl:x64-windows-static `
             nlohmann-json:x64-windows-static `
             discord-rpc:x64-windows-static `
+            wil:x64-windows-static `
             --triplet x64-windows-static
           if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
           # Copy discord-rpc to expected deps/ path
@@ -298,6 +299,7 @@ jobs:
             curl:x86-windows-static `
             nlohmann-json:x86-windows-static `
             discord-rpc:x86-windows-static `
+            wil:x86-windows-static `
             --triplet x86-windows-static
           if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
           $ins = Join-Path $env:GITHUB_WORKSPACE "vcpkg\installed\x86-windows-static"
