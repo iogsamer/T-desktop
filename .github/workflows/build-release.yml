@@ -77,9 +77,21 @@ jobs:
         shell: pwsh
         run: |
           $vcpkg = Join-Path $env:GITHUB_WORKSPACE "vcpkg\vcpkg.exe"
-          & $vcpkg install openssl:x64-windows-static curl:x64-windows-static nlohmann-json:x64-windows-static --triplet x64-windows-static
+          & $vcpkg install `
+            openssl:x64-windows-static `
+            curl:x64-windows-static `
+            nlohmann-json:x64-windows-static `
+            discord-rpc:x64-windows-static `
+            --triplet x64-windows-static
           if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
-          Write-Host "✅ vcpkg packages installed"
+          # Copy discord-rpc to expected deps/ path
+          $ins = Join-Path $env:GITHUB_WORKSPACE "vcpkg\installed\x64-windows-static"
+          New-Item -Force -ItemType Directory "deps\discord-rpc\win64-static\lib"     | Out-Null
+          New-Item -Force -ItemType Directory "deps\discord-rpc\win64-static\include"  | Out-Null
+          Copy-Item "$ins\lib\discord-rpc.lib"  "deps\discord-rpc\win64-static\lib\" -ErrorAction SilentlyContinue
+          Copy-Item "$ins\include\discord_rpc.h" "deps\discord-rpc\win64-static\include\" -ErrorAction SilentlyContinue
+          Copy-Item "$ins\include\discord_register.h" "deps\discord-rpc\win64-static\include\" -ErrorAction SilentlyContinue
+          Write-Host "✅ vcpkg packages installed + discord-rpc copied"
 
       - name: 📦 Install WebView2 via NuGet
         shell: pwsh
@@ -121,21 +133,7 @@ jobs:
           if ($dll) { Copy-Item $dll.FullName "deps\libmpv\x86_64\libmpv-2.dll" }
           Write-Host "✅ libmpv x64 ready"
 
-      - name: 💬 Build Discord RPC from source
-        shell: pwsh
-        run: |
-          git clone https://github.com/discord/discord-rpc.git drpc-src --depth=1
-          cmake -S drpc-src -B drpc-build -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
-          cmake --build drpc-build --config Release --parallel
-          New-Item -Force -ItemType Directory "deps\discord-rpc\win64-static\lib"     | Out-Null
-          New-Item -Force -ItemType Directory "deps\discord-rpc\win64-static\include"  | Out-Null
-          $lib = Get-ChildItem drpc-build -Filter "discord-rpc.lib" -Recurse | Select-Object -First 1
-          if ($lib) { Copy-Item $lib.FullName "deps\discord-rpc\win64-static\lib\discord-rpc.lib" }
-          Copy-Item "drpc-src\include\*" "deps\discord-rpc\win64-static\include\" -Recurse
-          Write-Host "✅ Discord RPC built from source"
+
 
       - name: ⚙️ CMake Configure x64
         shell: pwsh
@@ -253,8 +251,19 @@ jobs:
         shell: pwsh
         run: |
           $vcpkg = Join-Path $env:GITHUB_WORKSPACE "vcpkg\vcpkg.exe"
-          & $vcpkg install openssl:x86-windows-static curl:x86-windows-static nlohmann-json:x86-windows-static --triplet x86-windows-static
+          & $vcpkg install `
+            openssl:x86-windows-static `
+            curl:x86-windows-static `
+            nlohmann-json:x86-windows-static `
+            discord-rpc:x86-windows-static `
+            --triplet x86-windows-static
           if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+          $ins = Join-Path $env:GITHUB_WORKSPACE "vcpkg\installed\x86-windows-static"
+          New-Item -Force -ItemType Directory "deps\discord-rpc\win32-static\lib"     | Out-Null
+          New-Item -Force -ItemType Directory "deps\discord-rpc\win32-static\include"  | Out-Null
+          Copy-Item "$ins\lib\discord-rpc.lib"   "deps\discord-rpc\win32-static\lib\" -ErrorAction SilentlyContinue
+          Copy-Item "$ins\include\discord_rpc.h" "deps\discord-rpc\win32-static\include\" -ErrorAction SilentlyContinue
+          Copy-Item "$ins\include\discord_register.h" "deps\discord-rpc\win32-static\include\" -ErrorAction SilentlyContinue
 
       - name: 📦 Install WebView2 via NuGet x86
         shell: pwsh
@@ -292,20 +301,7 @@ jobs:
           $dll = Get-ChildItem mpv -Filter "libmpv*.dll" | Select-Object -First 1
           if ($dll) { Copy-Item $dll.FullName "deps\libmpv\i686\libmpv-2.dll" }
 
-      - name: 💬 Build Discord RPC x86 from source
-        shell: pwsh
-        run: |
-          git clone https://github.com/discord/discord-rpc.git drpc-src --depth=1
-          cmake -S drpc-src -B drpc-build -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
-          cmake --build drpc-build --config Release --parallel
-          New-Item -Force -ItemType Directory "deps\discord-rpc\win32-static\lib"     | Out-Null
-          New-Item -Force -ItemType Directory "deps\discord-rpc\win32-static\include"  | Out-Null
-          $lib = Get-ChildItem drpc-build -Filter "discord-rpc.lib" -Recurse | Select-Object -First 1
-          if ($lib) { Copy-Item $lib.FullName "deps\discord-rpc\win32-static\lib\discord-rpc.lib" }
-          Copy-Item "drpc-src\include\*" "deps\discord-rpc\win32-static\include\" -Recurse
+
 
       - name: ⚙️ CMake Configure x86
         shell: pwsh
